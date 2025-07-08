@@ -6,22 +6,29 @@ import {
 	createConnection,
 	TextDocuments,
 	Diagnostic,
-	DiagnosticSeverity,
 	ProposedFeatures,
-	InitializeParams,
-	DidChangeConfigurationNotification,
+	TextDocumentSyncKind,
+	TextDocumentPositionParams,
+	Location,
 	CompletionItem,
 	CompletionItemKind,
-	TextDocumentPositionParams,
-	TextDocumentSyncKind,
+	Range,
+	Hover,
+	MarkupKind,
+	CodeActionParams,
+	CodeAction,
+	DocumentSymbol,
+	SymbolKind,
+	InitializeParams,
 	InitializeResult,
+	DidChangeConfigurationNotification,
 	DocumentDiagnosticReportKind,
-	type DocumentDiagnosticReport
+	DocumentDiagnosticReport
 } from 'vscode-languageserver/node';
 
-import {
-	TextDocument
-} from 'vscode-languageserver-textdocument';
+import { TextDocument } from 'vscode-languageserver-textdocument';
+import { analyzeText, symbolTable, getWordAtPosition, getSymbolInfo } from './symbolTable';
+import { checkFunctionSpaces, fixFunctionSapces } from './rules/functions';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -32,6 +39,7 @@ const documents = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
@@ -54,6 +62,7 @@ connection.onInitialize((params: InitializeParams) => {
 	const result: InitializeResult = {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
+			definitionProvider: true,
 			// Tell the client that this server supports code completion.
 			completionProvider: {
 				resolveProvider: true
@@ -61,7 +70,10 @@ connection.onInitialize((params: InitializeParams) => {
 			diagnosticProvider: {
 				interFileDependencies: false,
 				workspaceDiagnostics: false
-			}
+			},
+			hoverProvider: true,
+			codeActionProvider: true,
+			documentSymbolProvider: true
 		}
 	};
 	if (hasWorkspaceFolderCapability) {
@@ -84,6 +96,29 @@ connection.onInitialized(() => {
 			connection.console.log('Workspace folder change event received.');
 		});
 	}
+});
+
+documents.onDidOpen(e => updateSymbolsForDocument(e.document));
+documents.onDidChangeContent(e => updateSymbolsForDocument(e.document));
+
+function updateSymbolsForDocument(doc: TextDocument) {
+	const text = doc.getText();
+	const symbols = analyzeText(text, doc.uri);
+	for (const [k, v] of symbols) {
+		symbolTable.set(k, v);
+	}
+}
+
+connection.onDefinition((params: TextDocumentPositionParams): Location | null => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) { return null; }
+
+	const lines = document.getText().split(/\r?\n/);
+	const line = lines[params.position.line];
+	const word = getWordAtPosition(line, params.position.character);
+
+	if (!word) { return null; }
+	return symbolTable.get(word) || null;
 });
 
 // The example settings
@@ -130,6 +165,10 @@ function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
 	return result;
 }
 
+export function getDocuments(): TextDocuments<TextDocument> {
+	return documents;
+}
+
 // Only keep settings for open documents
 documents.onDidClose(e => {
 	documentSettings.delete(e.document.uri);
@@ -161,46 +200,19 @@ documents.onDidChangeContent(change => {
 
 async function validateTextDocument(textDocument: TextDocument): Promise<Diagnostic[]> {
 	// In this simple example we get the settings for every validate run.
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	const settings = await getDocumentSettings(textDocument.uri);
 
 	// The validator creates diagnostics for all uppercase words length 2 and more
 	const text = textDocument.getText();
-	const pattern = /\b[A-Z]{2,}\b/g;
-	let m: RegExpExecArray | null;
 
-	let problems = 0;
+	// Here we would typically analyze the text and create diagnostics.
 	const diagnostics: Diagnostic[] = [];
-	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
-		problems++;
-		const diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length)
-			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'AFL Support'
-		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
-		}
-		diagnostics.push(diagnostic);
-	}
+	const fnSpaceDiagnostics = checkFunctionSpaces(text, textDocument.uri);
+	diagnostics.push(...fnSpaceDiagnostics);
+
+	// Send the computed diagnostics to VSCode UI.
+	// connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 	return diagnostics;
 }
 
@@ -209,26 +221,17 @@ connection.onDidChangeWatchedFiles(_change => {
 	connection.console.log('We received a file change event');
 });
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion(
-	(_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-		// The pass parameter contains the position of the text document in
-		// which code complete got requested. For the example we ignore this
-		// info and always provide the same completion items.
-		return [
-			{
-				label: 'TypeScript',
-				kind: CompletionItemKind.Text,
-				data: 1
-			},
-			{
-				label: 'JavaScript',
-				kind: CompletionItemKind.Text,
-				data: 2
-			}
-		];
+connection.onCompletion((_params) => {
+	const completions: CompletionItem[] = [];
+	for (const [name] of symbolTable.entries()) {
+		completions.push({
+			label: name,
+			kind: CompletionItemKind.Function,
+			data: name
+		});
 	}
-);
+	return completions;
+});
 
 // This handler resolves additional information for the item selected in
 // the completion list.
@@ -244,6 +247,63 @@ connection.onCompletionResolve(
 		return item;
 	}
 );
+
+connection.onHover((params): Hover | null => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) { return null; }
+
+	const lines = document.getText().split(/\r?\n/);
+	const line = lines[params.position.line];
+	const word = getWordAtPosition(line, params.position.character);
+	if (!word) { return null; }
+
+	const info = getSymbolInfo(word);
+	if (!info) { return null; }
+
+	return {
+		contents: {
+			kind: MarkupKind.Markdown,
+			value: `**${word}**\n\n${info}`
+		}
+	};
+});
+
+connection.onCodeAction((params: CodeActionParams): CodeAction[] => {
+	const actions: CodeAction[] = [];
+	for (const diagnostic of params.context.diagnostics) {
+		if (diagnostic.message.includes("space before ')'")) {
+			const action = fixFunctionSapces(params, diagnostic);
+			if (action) {
+				actions.push(action);
+			}
+		}
+	}
+	return actions;
+});
+
+connection.onDocumentSymbol((params): DocumentSymbol[] => {
+	const document = documents.get(params.textDocument.uri);
+	if (!document) { return []; }
+
+	const result: DocumentSymbol[] = [];
+	const lines = document.getText().split(/\r?\n/);
+
+	lines.forEach((line, i) => {
+		const match = line.match(/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)/);
+		if (match) {
+			const name = match[1];
+			const start = line.indexOf(name);
+			result.push({
+				name,
+				kind: SymbolKind.Function,
+				range: Range.create(i, start, i, start + name.length),
+				selectionRange: Range.create(i, start, i, start + name.length)
+			});
+		}
+	});
+
+	return result;
+});
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events
