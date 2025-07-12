@@ -82,5 +82,9 @@
 		"mocha": "^10.3.0",
 		"typescript": "^5.8.2",
 		"typescript-eslint": "^8.26.0"
+	},
+	"dependencies": {
+		"eslint-plugin-afl": "github:caoanhhao/eslint-plugin-afl",
+		"vscode": "^1.1.37"
 	}
 }

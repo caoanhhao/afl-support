@@ -25,6 +25,7 @@ export function checkFunctionSpaces(text: string, _uri: string): Diagnostic[] {
 		// Check if we are exiting a comment block
 		if (isInCommentBlock && originalLine.includes('*/')) {
 			isInCommentBlock = false;
+			continue;
 		}
 
 		// Skip empty lines and comments

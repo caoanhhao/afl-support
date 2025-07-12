@@ -204,15 +204,15 @@ async function validateTextDocument(textDocument: TextDocument): Promise<Diagnos
 	const settings = await getDocumentSettings(textDocument.uri);
 
 	// The validator creates diagnostics for all uppercase words length 2 and more
-	const text = textDocument.getText();
+	// const text = textDocument.getText();
 
+	// TODO: use array of rules to get diagnostics
 	// Here we would typically analyze the text and create diagnostics.
 	const diagnostics: Diagnostic[] = [];
-	const fnSpaceDiagnostics = checkFunctionSpaces(text, textDocument.uri);
-	diagnostics.push(...fnSpaceDiagnostics);
+	// const fnSpaceDiagnostics = checkFunctionSpaces(text, textDocument.uri);
+	// diagnostics.push(...fnSpaceDiagnostics);
 
 	// Send the computed diagnostics to VSCode UI.
-	// connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 	return diagnostics;
 }
 
