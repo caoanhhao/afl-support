@@ -56,6 +56,9 @@ export async function activate(context: ExtensionContext) {
 
 	// Update vscode settings
 	await updateVScodeSettings();
+
+	// Install ESLint and eslint-plugin-afl if not already installed
+	installDependencies();
 }
 
 async function updateVScodeSettings() {
@@ -64,22 +67,60 @@ async function updateVScodeSettings() {
 	const validateSet = new Set([...(config.validate || []), 'afl']);
 	const validate = Array.from(validateSet);
 	await config.update('validate', validate, ConfigurationTarget.Workspace);
+}
+
+async function installDependencies() {
+	const workspaceFolders = workspace.workspaceFolders;
+	if (!workspaceFolders || workspaceFolders.length === 0) {
+		window.showErrorMessage('No workspace folder found.');
+		return;
+	}
+
+	// Filter workspace folders to only those that have a package.json file and do not already have eslint installed
+	const folderNames: string[] = [];
+	for (const folder of workspaceFolders) {
+		// Check if eslint is NOT installed
+		if (!hasPackageInstalled('eslint', folder?.uri.fsPath)) {
+			folderNames.push(folder.name);
+		}
+	}
+
+	if (folderNames.length === 0) {
+		client.outputChannel?.appendLine('All workspace folders with a package.json already have ESLint installed.');
+		return;
+	}
+
+	const selectedFolderName = await window.showQuickPick(folderNames, {
+		placeHolder: 'Select the workspace folder to check for installed packages'
+	});
+	if (!selectedFolderName) {
+		window.showErrorMessage('No workspace folder selected.');
+		return;
+	}
+	const selectedFolder = workspaceFolders.find(folder => folder.name === selectedFolderName);
+	const workspacePath = selectedFolder?.uri.fsPath;
+	if (!workspacePath) {
+		window.showErrorMessage('Invalid workspace folder.');
+		return;
+	}
 
 	// Check if the 'eslint.enable' setting is set to true
 	const terminal = window.createTerminal('Install ESLint');
 
+	// cd to the workspace folder
+	terminal.sendText(`cd "${workspacePath}"`);
+
 	// If ESLint is not installed, install it
-	if (!hasPackageInstalled('eslint')) {
+	if (!hasPackageInstalled('eslint', workspacePath)) {
 		terminal.sendText('npm install eslint --save-dev');
 		terminal.show();
 	}
 
 	// If the 'eslint-plugin-afl' package is not installed, install it
-	if (!hasPackageInstalled('eslint-plugin-afl')) {
+	if (!hasPackageInstalled('eslint-plugin-afl', workspacePath)) {
 		terminal.sendText('npm install git+https://github.com/caoanhhao/eslint-plugin-afl.git --save-dev');
 		terminal.show();
 		terminal.sendText('exit');
-
 
 		const disposable = window.onDidCloseTerminal((closedTerminal) => {
 			if (closedTerminal === terminal) {
@@ -97,13 +138,7 @@ async function updateVScodeSettings() {
 	}
 }
 
-function hasPackageInstalled(packageName: string): boolean {
-	const folders = workspace.workspaceFolders;
-	if (!folders || folders.length === 0) {
-		window.showErrorMessage('No workspace folder found.');
-		return;
-	}
-	const workspacePath = folders[0].uri.fsPath;
+function hasPackageInstalled(packageName: string, workspacePath = ''): boolean {
 	const packageJsonPath = path.join(workspacePath, 'package.json');
 
 	if (!fs.existsSync(packageJsonPath)) {
