@@ -1,6 +1,9 @@
 import { DocumentSymbol, SymbolKind } from 'vscode-languageserver';
 import { AST_NODE_TYPES } from "@typescript-eslint/types";
-import type { AnyNode, VariableDeclarator } from 'acorn';
+import type { AnyNode, VariableDeclarator, Options } from 'acorn';
+import { Parser } from 'acorn';
+import { AFLParser } from 'eslint-plugin-afl';
+import * as fs from 'fs';
 
 export function stripStrings(line: string): string {
 	return line.replace(/\\"([^\\"\\]|\\.)*\\"/g, (match) => ' '.repeat(match.length));
@@ -65,5 +68,31 @@ export function nodeToDocumentSymbol(node: AnyNode): DocumentSymbol | DocumentSy
 		},
 		children
 	);
+}
 
+export function getAST(text: string, options?: Options): AnyNode | null {
+	try {
+
+		const aflParser = Parser.extend(AFLParser as never);
+		return aflParser.parse(text, {
+			ecmaVersion: 6,
+			sourceType: "module",
+			locations: true,
+			...options
+		});
+
+	} catch (error) {
+		console.error('Error parsing text:', error);
+		return null;
+	}
+}
+
+export function getASTFromFile(filePath: string): AnyNode | null {
+	try {
+		const text = fs.readFileSync(filePath, 'utf8');
+		return getAST(text);
+	} catch (error) {
+		console.error('Error reading file:', error);
+		return null;
+	}
 }

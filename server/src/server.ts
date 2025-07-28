@@ -108,11 +108,28 @@ connection.onInitialized(() => {
 });
 
 documents.onDidOpen((e) => updateSymbolsForDocument(e.document));
-documents.onDidChangeContent((e) => updateSymbolsForDocument(e.document));
 
-function updateSymbolsForDocument(doc: TextDocument) {
+let updateSymbolTimeout: NodeJS.Timeout | null = null;
+
+documents.onDidChangeContent((e) => {
+	// Only process documents with the "afl" language ID
+	if (e.document.languageId !== "afl") {
+		return;
+	}
+
+	// add document cooldown flag
+	if (updateSymbolTimeout !== null) {
+		clearTimeout(updateSymbolTimeout);
+	}
+	updateSymbolTimeout = setTimeout(() => {
+		// Update symbols for the document when its content changes
+		updateSymbolsForDocument(e.document, true);
+	}, 2000);
+});
+
+function updateSymbolsForDocument(doc: TextDocument, clearCache = false): void {
 	const text = doc.getText();
-	const symbols = analyzeText(text, doc.uri);
+	const symbols = analyzeText(text, doc.uri, clearCache);
 	for (const [k, v] of symbols) {
 		symbolTable.set(k, v);
 	}
